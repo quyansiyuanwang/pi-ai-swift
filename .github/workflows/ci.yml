@@ -32,7 +32,7 @@ jobs:
   notify-downstream:
     name: Notify downstream
     needs: build-test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.DISPATCH_TOKEN != ''
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -40,9 +40,14 @@ jobs:
         repo: [pi-agent-swift, pi-kit-swift, macos-ai-assistant]
     steps:
       - name: Dispatch ${{ matrix.repo }}
+        continue-on-error: true
         env:
           TOKEN: ${{ secrets.DISPATCH_TOKEN }}
         run: |
+          if [ -z "$TOKEN" ]; then
+            echo "DISPATCH_TOKEN not set; skipping dispatch to ${{ matrix.repo }}"
+            exit 0
+          fi
           curl -sS -f -X POST \
             -H "Authorization: Bearer $TOKEN" \
             -H "Accept: application/vnd.github+json" \
