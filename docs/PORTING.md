@@ -10,8 +10,8 @@ This document records how the Swift port maps to the upstream TypeScript source
 | M1 | Core type layer + `JSONValue` / `JSONSchema` | ✅ done |
 | M2 | OpenAI Completions (non-streaming) + error body + retry | ✅ done |
 | M3 | OpenAI Completions (SSE streaming) + tool fragment accumulation + reasoning + cancellation | ✅ done |
-| M4 | Full test coverage + CI + docs | ⏳ |
-| M5 | Live endpoint example + `v0.1.0` tag | ⏳ |
+| M4 | Full test coverage + CI + docs + LICENSE/ATTRIBUTION | ✅ done |
+| M5 | `calculateCost` / `clampThinkingLevel` + offline example | ✅ done |
 
 ## M1 type mapping
 
@@ -173,4 +173,117 @@ Chat Completions provider.
    `URLProtocol` may buffer the mock body until the protocol completes, so
    provider-level tests assert end-to-end wiring while byte-boundary UTF-8 and
    framing are covered deterministically by `SSEFrameDecoderTests`.
+
+## M4 mapping (tests, CI, docs)
+
+M4 completes the engineering surface around the ported code.
+
+| Deliverable | File | Notes |
+| --- | --- | --- |
+| README | `README.md` | Install, quick start, streaming, tools, public API, upstream relationship. |
+| CI | `.github/workflows/ci.yml` | macOS runner runs `swift build -Xswiftc -warnings-as-errors` and `swift test -Xswiftc -warnings-as-errors`. |
+| License | `LICENSE` | MIT, upstream copyright retained. |
+| Attribution | `ATTRIBUTION.md` | Notes the port from `earendil-works/pi@1.2.0` (MIT). |
+| Porting doc | `docs/PORTING.md` | This file: file-by-file mapping + consolidated deviations. |
+
+### M4 deviations
+
+1. **CI uses a macOS runner only.** Upstream is runtime-agnostic; PiAI targets
+   macOS 13+/iOS 16+, so the workflow runs on `macos-15`. `swift build` builds
+   the library and the `PiAIExamples` executable; `swift test` runs the tests.
+2. **Tests use Swift Testing, not XCTest.** See the Testing note above: the
+   build host has only Apple Command Line Tools. `swift test` discovers the
+   suites normally.
+
+## M5 mapping (pricing, thinking levels, example)
+
+M5 ports the two pure helpers of upstream `models.ts` and adds an offline,
+end-to-end example.
+
+| Upstream | Swift | Notes |
+| --- | --- | --- |
+| `models.ts` `calculateCost` | `Models.swift` (`Model.calculateCost(usage:)`, `Model.applyingCost(to:)`) | Returns a `Usage.Cost` instead of mutating (Swift value semantics). |
+| `models.ts` `getSupportedThinkingLevels` | `Models.swift` (`Model.supportedThinkingLevels`) | Same opt-in rule for `xhigh` / `max`. |
+| `models.ts` `clampThinkingLevel` | `Models.swift` (`Model.clampThinkingLevel(_:)`) | Same nearest-higher-then-lower clamp. |
+| `providers/model-schema.ts` `ModelCost*` / `ThinkingLevelMap` / `ModelInputModality` | `Types/Model.swift` | Codable, backward-compatible defaults. |
+| `api/openai-completions.ts` tool-call loop | `Examples/PiAIExamples` + `Tests/PiAITests/EndToEndExampleTests.swift` | Deterministic `URLProtocol` mock; no API key. |
+
+### M5 deviations
+
+1. **`calculateCost` returns instead of mutating.** Upstream writes into
+   `usage.cost` and returns it. Swift's value semantics make that surprising, so
+   the port returns a fresh ``Usage/Cost``; ``Model/applyingCost(to:)`` provides
+   the in-place-style convenience.
+2. **`input`, `cost`, `thinkingLevelMap` are optional on the wire.** Decoding a
+   model catalog that predates these fields succeeds with defaults
+   (`input == [.text]`, `cost == .zero`, `thinkingLevelMap == nil`). Encoding
+   always emits `input` and `cost`.
+3. **`ThinkingLevelMap` is tri-state.** ``ThinkingLevelMap/Value`` distinguishes
+   a missing key (provider default), `null` (``ThinkingLevelMap/Value/unsupported``)
+   and a mapped string, matching `Partial<Record<ModelThinkingLevel, string | null>>`.
+4. **`Model.input` is modelled but not yet consumed.** Upstream
+   `api/transform-messages.ts` downgrades images to a placeholder when
+   `model.input` excludes `image`; the Swift request builder currently forwards
+   images unconditionally. This is a known gap (see deviations summary).
+5. **The `v0.1.0` tag is intentionally not created by the porting agent.**
+   Tagging is left to the repository owner; `PiAI.version` already reports
+   `0.1.0`.
+
+## Upstream file correspondence
+
+Every upstream file in scope and where its behavior lives in Swift.
+
+| Upstream `packages/ai/src/…` | Swift | Coverage |
+| --- | --- | --- |
+| `types.ts` | `Types/Model.swift`, `Types/Chat.swift`, `Types/Message.swift`, `Types/Content.swift`, `Types/Tool.swift`, `Types/ToolChoice.swift`, `Types/Usage.swift`, `Types/Events.swift` | OpenAI-compatible subset. |
+| `api/openai-completions.ts` | `Providers/OpenAIRequestBuilder.swift`, `Providers/OpenAIResponseParser.swift`, `Providers/OpenAIStreamParser.swift`, `Providers/OpenAICompletionsProvider.swift`, `Providers/ChatCompleting.swift`, `Providers/ChatProvider.swift` | Request build, non-streaming parse, SSE parse, retry, cancel. |
+| `api/simple-options.ts` | `Types/Chat.swift` (`ChatOptions`), `Models.swift` (`clampThinkingLevel`) | `toolChoice` / sampling simplifications only. |
+| `api/transform-messages.ts` | `Providers/OpenAIRequestBuilder.swift` (`convertMessages`) | Message conversion; image downgrade **not** ported (see deviations). |
+| `api/openai-prompt-cache.ts` | — | Not ported (no prompt-cache key support). |
+| `api/constrained-sampling.ts` | `Types/Tool.swift` (`ConstrainedSampling`) | The config value is modelled; provider-side schema checking is not. |
+| `models.ts` | `Models.swift` | `calculateCost` + `clampThinkingLevel` only (no vendor catalog / `Models` runtime). |
+| `providers/model-schema.ts` | `Types/Model.swift`, `JSON/JSONSchema.swift` | Cost, thinking-level map, modalities, schema subset. |
+| `providers/compat-schema.ts` | — | Compat overrides are out of scope. |
+| `utils/event-stream.ts` | `Providers/OpenAICompletionsProvider.swift` | Replaced by `AsyncThrowingStream`. |
+| `utils/json-parse.ts` | `Utils/JSONParse.swift` | Repair pass; partial JSON omitted. |
+| `utils/retry.ts` | `Utils/ProviderRetry.swift` | Backoff primitives. |
+| `utils/provider-retry.ts` | `Utils/ProviderRetry.swift` | Full retry policy + abortable sleep. |
+| `utils/error-body.ts` | `Utils/ErrorBody.swift` | Normalize / format / truncate / extract. |
+| `utils/headers.ts` | `HTTP/HTTPClient.swift`, `Providers/OpenAIRequestBuilder.swift` | Case-insensitive header handling. |
+| `utils/text.ts` | — | Text helpers not needed by the subset. |
+| `utils/transcript.ts` | `Types/Chat.swift` (`ChatContext`) | Simplified context. |
+| `utils/sanitize-unicode.ts` | `Utils/SanitizeUnicode.swift` | Surrogate cleanup. |
+| `utils/hash.ts` | — | Not ported (no prompt cache / fingerprinting). |
+| `utils/uuid.ts` | — | `UUID` from Foundation is used directly. |
+| `utils/sleep.ts` | `Utils/ProviderRetry.swift` (`abortableSleep`) | Abortable sleep. |
+| `utils/abort.ts` / `utils/abort-signals.ts` | `Types/Chat.swift` (`CancellationSignal`) | Lock-protected, `Sendable`. |
+| `utils/pi-user-agent.ts` | `Utils/PiUserAgent.swift` | Host OS/arch instead of Node `os`. |
+| `utils/provider-env.ts` | — | API key is passed explicitly via `ChatOptions.apiKey`. |
+
+## Known deviations summary
+
+Consolidated list of every intentional difference from upstream; details are
+in the per-milestone sections above.
+
+1. **Public event protocol is simplified** (`AssistantMessageEvent`) — no
+   per-block `*_start` / `*_end` events and no `reason` on `done`/`error`.
+2. **`Model` uses `baseURL` but encodes `baseUrl`**, and its catalog fields are
+   optional on decode for backward compatibility.
+3. **`ToolCall.arguments` is a general `JSONValue`**, not a `JsonObject`.
+4. **`JSONSchema` replaces TypeBox** (self-contained, `extra` preserves unknown
+   keywords).
+5. **`ChatCompleting.complete` throws on transport errors** instead of returning
+   an error `AssistantMessage`; a provider `finish_reason` error still yields a
+   message with `stopReason == .error`.
+6. **`[DONE]` infers a missing `finish_reason`**; only a clean EOF without one
+   throws `OpenAIStreamError/missingFinishReason`.
+7. **No `partial-json` dependency** — tool argument fragments are emitted raw
+   and parsed once at the end (falling back to `{}`).
+8. **Retries cover request establishment only**, never a started stream.
+9. **Streaming always requests usage** (`stream_options.include_usage`).
+10. **`calculateCost` is pure** (returns instead of mutating `usage.cost`).
+11. **Image downgrade based on `Model.input` is not implemented**; images are
+    forwarded regardless of the declared modalities.
+12. **Out of scope:** other providers, images, OAuth, model stores, session
+    resources, CLI, vendor catalogs and `providers/*.js` definitions.
 
