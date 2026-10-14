@@ -1,5 +1,7 @@
 # PiAI
 
+[![CI](https://github.com/quyansiyuanwang/pi-ai-swift/actions/workflows/ci.yml/badge.svg)](https://github.com/quyansiyuanwang/pi-ai-swift/actions/workflows/ci.yml)
+
 A native Swift port of the **OpenAI-compatible Chat Completions** subset of
 [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi) (upstream
 version **1.2.0**, MIT).
