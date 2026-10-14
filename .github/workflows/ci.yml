@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  repository_dispatch:
+    types: [upstream-changed]
   workflow_dispatch:
 
 concurrency:
@@ -26,3 +28,23 @@ jobs:
 
       - name: Test
         run: swift test -Xswiftc -warnings-as-errors
+
+  notify-downstream:
+    name: Notify downstream
+    needs: build-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.DISPATCH_TOKEN != ''
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        repo: [pi-agent-swift, pi-kit-swift, macos-ai-assistant]
+    steps:
+      - name: Dispatch ${{ matrix.repo }}
+        env:
+          TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          curl -sS -f -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/quyansiyuanwang/${{ matrix.repo }}/dispatches" \
+            -d '{"event_type":"upstream-changed"}'
