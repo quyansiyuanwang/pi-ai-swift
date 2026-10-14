@@ -8,7 +8,7 @@ This document records how the Swift port maps to the upstream TypeScript source
 | Milestone | Scope | Status |
 | --- | --- | --- |
 | M1 | Core type layer + `JSONValue` / `JSONSchema` | ✅ done |
-| M2 | OpenAI Completions (non-streaming) + error body + retry | ⏳ |
+| M2 | OpenAI Completions (non-streaming) + error body + retry | ✅ done |
 | M3 | OpenAI Completions (SSE streaming) + tool fragment accumulation + reasoning + cancellation | ⏳ |
 | M4 | Full test coverage + CI + docs | ⏳ |
 | M5 | Live endpoint example + `v0.1.0` tag | ⏳ |
@@ -33,7 +33,7 @@ This document records how the Swift port maps to the upstream TypeScript source
 | `ConstrainedSamplingConfig \| false` | `ConstrainedSampling` | `false` is modelled as `.disabled`. |
 | `Context` | `ChatContext` | `systemPrompt` / `messages` / `tools`. |
 | `AssistantMessageEvent` | `AssistantMessageEvent` | Simplified event protocol (see below). |
-| `StreamOptions` (subset) | `ChatOptions` | `apiKey`, `temperature`, `maxTokens`, `headers`, `signal`. |
+| `StreamOptions` (subset) | `ChatOptions` | `apiKey`, `temperature`, `maxTokens`, `toolChoice`, `headers`, `signal`. |
 | `AbortSignal` | `CancellationSignal` | Lock-protected, thread-safe, `Sendable`. |
 | `JsonValue` / `JsonObject` | `JSONValue` / `JSONObject` | Self-contained, no dependency. |
 | TypeBox `TSchema` | `JSONSchema` | Self-implemented JSON Schema subset. |
@@ -64,6 +64,58 @@ This document records how the Swift port maps to the upstream TypeScript source
    bookkeeping is out of scope for the OpenAI-compatible subset).
 7. **Cost calculation** (`calculateCost`) and `clampThinkingLevel` are scheduled
    for a later milestone; `Model` currently carries no pricing catalog.
+
+## M2 mapping
+
+M2 ports the non-streaming subset of the OpenAI-compatible Chat Completions
+provider plus its shared error/retry utilities.
+
+| Upstream | Swift | Notes |
+| --- | --- | --- |
+| `utils/error-body.ts` | `Utils/ErrorBody.swift` | `normalize` / `format` / `truncate` / `extractMessage`; only the `ProviderHTTPError` shape is probed. |
+| `utils/provider-retry.ts` | `Utils/ProviderRetry.swift` | Same policy (retryable statuses, `x-should-retry`, `Retry-After`, exponential backoff + jitter, abortable sleep). |
+| `utils/pi-user-agent.ts` | `Utils/PiUserAgent.swift` | Reports host OS name/version/arch instead of Node's `os.platform()/release()/arch()`. |
+| `utils/sanitize-unicode.ts` | `Utils/SanitizeUnicode.swift` | Removes unpaired UTF-16 surrogates. |
+| SDK HTTP error object | `HTTP/ProviderHTTPError.swift` | Carries `status`, lowercase `headers`, truncated `body`, extracted `message`. |
+| `fetch` / SDK transport | `HTTP/HTTPClient.swift` | `HTTPClient` protocol + `URLSessionHTTPClient`; non-2xx throws, `URLError` becomes a network error. |
+| `api/openai-completions.ts` `createClient` + `buildParams` | `Providers/OpenAIRequestBuilder.swift` | Builds the `POST .../chat/completions` request and JSON body. |
+| `api/openai-completions.ts` `convertMessages` | `Providers/OpenAIRequestBuilder.swift` | system/user(text+image)/assistant/tool-result conversion. |
+| `api/openai-completions.ts` `convertTools` | `Providers/OpenAIRequestBuilder.swift` | `{"type":"function","function":{name,description,parameters}}`. |
+| `api/openai-completions.ts` streaming parser + `parseChunkUsage` + `mapStopReason` | `Providers/OpenAIResponseParser.swift` | Consumes one full `ChatCompletion` object instead of chunks. |
+| `stream()` | `Providers/ChatCompleting.swift` + `Providers/OpenAICompletionsProvider.swift` | `complete(...)` builds, retries, and parses. |
+
+### M2 deviations
+
+1. **Non-streaming derivation.** Upstream `openai-completions` is streaming-only
+   (`stream: true`). M2 sends `stream: false` and parses the full response body.
+   Block ordering follows the streaming parser: reasoning (`thinking`) precedes
+   answer text; tool calls follow.
+2. **`max_tokens`, not `max_completion_tokens`.** Per `TASK.md`, the request
+   body always uses `max_tokens` and omits `store`, `prompt_cache_key`,
+   `stream_options`, compat/vendor fields, session-affinity headers, and
+   github-copilot handling.
+3. **Throw-on-error `complete`.** Upstream returns an exhausted
+   `AssistantMessage` with `stopReason == .error`. `ChatCompleting.complete`
+   throws instead: non-2xx responses throw `ProviderHTTPError` and transport
+   failures throw a network `ProviderHTTPError`. (A `finish_reason` that maps
+   to `.error` still produces a message with `stopReason == .error` and
+   `errorMessage`, matching upstream.)
+4. **Tool-call JSON arguments are best effort.** Empty or malformed
+   `function.arguments` strings become `{}` rather than throwing;
+   `OpenAIResponseError/invalidToolArguments(_:)` is exposed for API
+   completeness but intentionally not thrown by the parser.
+5. **Retry test seams.** `ProviderRetryOptions` adds `baseBackoffMs`,
+   `maxBackoffMs`, `jitterFraction`, `random`, and `sleep` so tests can assert
+   backoff deterministically. Defaults mirror the pinned SDK policy.
+6. **`tool_choice` is emitted from `ChatOptions.toolChoice`.** Upstream keeps
+   `toolChoice` on the options (`SimpleStreamOptions`) and forwards it to
+   `params.tool_choice`. Swift mirrors that with the ``ToolChoice`` enum
+   (`auto` / `none` / `required` / forced function); `nil` omits the field.
+7. **Error body normalization** only understands the Swift `ProviderHTTPError`
+   shape; the upstream SDK-specific probes (Mistral `statusCode`, `openai`
+   `error`, `@google/genai`, Bedrock `$metadata`/`$response`) are unnecessary.
+8. **Tool-result images** are not forwarded as a follow-up user message; an
+   image-only tool result serializes as `"(no tool output)"`.
 
 ## Testing note
 

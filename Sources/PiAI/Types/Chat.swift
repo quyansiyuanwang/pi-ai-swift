@@ -66,6 +66,8 @@ public struct ChatOptions: Sendable {
     public var apiKey: String
     public var temperature: Double?
     public var maxTokens: Int?
+    /// Optional tool selection forwarded as `tool_choice` when present.
+    public var toolChoice: ToolChoice?
     public var headers: [String: String]
     /// Optional cancellation signal. When cancelled the in-flight stream stops.
     public var signal: CancellationSignal?
@@ -74,12 +76,14 @@ public struct ChatOptions: Sendable {
         apiKey: String = "",
         temperature: Double? = nil,
         maxTokens: Int? = nil,
+        toolChoice: ToolChoice? = nil,
         headers: [String: String] = [:],
         signal: CancellationSignal? = nil
     ) {
         self.apiKey = apiKey
         self.temperature = temperature
         self.maxTokens = maxTokens
+        self.toolChoice = toolChoice
         self.headers = headers
         self.signal = signal
     }
