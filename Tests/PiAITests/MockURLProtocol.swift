@@ -6,21 +6,61 @@ import Foundation
 /// Each test therefore targets a unique mock host (`https://<token>.example.com`)
 /// and this protocol keeps a separate response queue/counters per host.
 final class MockURLProtocol: URLProtocol, @unchecked Sendable {
+    private static let streamQueue = DispatchQueue(label: "MockURLProtocol.stream")
+    private let stopLock = NSLock()
+    private var stopped = false
+
     struct MockResponse: @unchecked Sendable {
         var statusCode: Int
         var headers: [String: String]
         var body: Data?
         var error: Error?
+        /// When non-empty, the response is delivered as a streamed body, one
+        /// `Data` chunk at a time, before `error`/completion.
+        var streamChunks: [Data]
+        /// Delay in milliseconds applied between streamed chunks.
+        var streamDelayMs: Int
+        /// Error delivered after the final streamed chunk (or immediately when
+        /// `streamChunks` is empty).
+        var streamError: Error?
 
-        init(statusCode: Int = 200, headers: [String: String] = [:], body: Data? = nil, error: Error? = nil) {
+        init(
+            statusCode: Int = 200,
+            headers: [String: String] = [:],
+            body: Data? = nil,
+            error: Error? = nil,
+            streamChunks: [Data] = [],
+            streamDelayMs: Int = 0,
+            streamError: Error? = nil
+        ) {
             self.statusCode = statusCode
             self.headers = headers
             self.body = body
             self.error = error
+            self.streamChunks = streamChunks
+            self.streamDelayMs = streamDelayMs
+            self.streamError = streamError
         }
 
         static func json(_ json: String, statusCode: Int = 200, headers: [String: String] = [:]) -> MockResponse {
             MockResponse(statusCode: statusCode, headers: headers, body: Data(json.utf8))
+        }
+
+        /// A chunked `text/event-stream` response.
+        static func stream(
+            _ chunks: [Data],
+            delayMs: Int = 5,
+            error: Error? = nil,
+            statusCode: Int = 200,
+            headers: [String: String] = ["Content-Type": "text/event-stream"]
+        ) -> MockResponse {
+            MockResponse(
+                statusCode: statusCode,
+                headers: headers,
+                streamChunks: chunks,
+                streamDelayMs: delayMs,
+                streamError: error
+            )
         }
     }
 
@@ -109,6 +149,11 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
             return
         }
 
+        if !response.streamChunks.isEmpty || response.streamError != nil {
+            deliverStream(response, url: url)
+            return
+        }
+
         if let http = HTTPURLResponse(
             url: url,
             statusCode: response.statusCode,
@@ -123,7 +168,48 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocolDidFinishLoading(self)
     }
 
-    override func stopLoading() {}
+    override func stopLoading() {
+        stopLock.lock()
+        stopped = true
+        stopLock.unlock()
+    }
+
+    /// Delivers a response body incrementally on a private serial queue.
+    private func deliverStream(_ response: MockResponse, url: URL) {
+        if let http = HTTPURLResponse(
+            url: url,
+            statusCode: response.statusCode,
+            httpVersion: "HTTP/1.1",
+            headerFields: response.headers
+        ) {
+            client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
+        }
+
+        let queue = Self.streamQueue
+
+        let delay = response.streamDelayMs
+        let chunks = response.streamChunks
+        for (offset, chunk) in chunks.enumerated() {
+            queue.asyncAfter(deadline: .now() + .milliseconds(delay * (offset + 1))) { [weak self] in
+                guard let self, !self.isStopped else { return }
+                self.client?.urlProtocol(self, didLoad: chunk)
+            }
+        }
+        queue.asyncAfter(deadline: .now() + .milliseconds(delay * (chunks.count + 1))) { [weak self] in
+            guard let self, !self.isStopped else { return }
+            if let error = response.streamError {
+                self.client?.urlProtocol(self, didFailWithError: error)
+            } else {
+                self.client?.urlProtocolDidFinishLoading(self)
+            }
+        }
+    }
+
+    private var isStopped: Bool {
+        stopLock.lock()
+        defer { stopLock.unlock() }
+        return stopped
+    }
 
     /// URLSession may move `httpBody` into `httpBodyStream` before handing the
     /// request to a `URLProtocol`; capture whichever form is present.

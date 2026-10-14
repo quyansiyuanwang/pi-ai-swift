@@ -63,6 +63,17 @@ private struct MockChatProvider: ChatProvider {
         #expect(counter.count == 1)
     }
 
+    @Test func abortIsAnAliasForCancel() {
+        let signal = CancellationSignal()
+        let counter = Counter()
+        signal.onCancel { counter.increment() }
+
+        signal.abort()
+
+        #expect(signal.isCancelled)
+        #expect(counter.count == 1)
+    }
+
     @Test func chatContextRoundTrip() throws {
         let context = ChatContext(
             systemPrompt: "Be terse.",

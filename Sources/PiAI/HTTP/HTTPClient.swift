@@ -24,7 +24,7 @@ public protocol HTTPClient: Sendable {
 
 /// The default ``HTTPClient`` backed by `URLSession`.
 public struct URLSessionHTTPClient: HTTPClient {
-    private let session: URLSession
+    let session: URLSession
 
     public init(session: URLSession = .shared) {
         self.session = session

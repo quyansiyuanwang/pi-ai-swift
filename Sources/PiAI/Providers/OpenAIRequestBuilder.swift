@@ -27,7 +27,8 @@ public enum OpenAIRequestBuilder {
         model: Model,
         context: ChatContext,
         options: ChatOptions,
-        path: String = "chat/completions"
+        path: String = "chat/completions",
+        streaming: Bool = false
     ) throws -> URLRequest {
         let url = try resolveURL(baseURL: model.baseURL, path: path)
         var request = URLRequest(url: url)
@@ -54,21 +55,32 @@ public enum OpenAIRequestBuilder {
         for (name, value) in headers {
             request.setValue(value, forHTTPHeaderField: name)
         }
-        request.httpBody = try JSONEncoder().encode(makeBody(model: model, context: context, options: options))
+        request.httpBody = try JSONEncoder().encode(
+            makeBody(model: model, context: context, options: options, streaming: streaming)
+        )
         return request
     }
 
     /// Builds the JSON request body.
+    ///
+    /// `streaming` toggles `stream` and requests incremental usage reporting
+    /// (`stream_options.include_usage`), matching upstream's
+    /// `supportsUsageInStreaming` default.
     public static func makeBody(
         model: Model,
         context: ChatContext,
-        options: ChatOptions
+        options: ChatOptions,
+        streaming: Bool = false
     ) -> JSONValue {
         var body: JSONObject = [
             "model": .string(model.id),
             "messages": .array(convertMessages(context)),
-            "stream": .bool(false),
+            "stream": .bool(streaming),
         ]
+
+        if streaming {
+            body["stream_options"] = .object(["include_usage": .bool(true)])
+        }
 
         if let maxTokens = options.maxTokens {
             body["max_tokens"] = .int(maxTokens)

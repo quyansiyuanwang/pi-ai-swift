@@ -9,7 +9,7 @@ This document records how the Swift port maps to the upstream TypeScript source
 | --- | --- | --- |
 | M1 | Core type layer + `JSONValue` / `JSONSchema` | ✅ done |
 | M2 | OpenAI Completions (non-streaming) + error body + retry | ✅ done |
-| M3 | OpenAI Completions (SSE streaming) + tool fragment accumulation + reasoning + cancellation | ⏳ |
+| M3 | OpenAI Completions (SSE streaming) + tool fragment accumulation + reasoning + cancellation | ✅ done |
 | M4 | Full test coverage + CI + docs | ⏳ |
 | M5 | Live endpoint example + `v0.1.0` tag | ⏳ |
 
@@ -124,3 +124,53 @@ The build host only has Apple Command Line Tools installed (no full Xcode), so
 **Swift Testing** framework (`import Testing`, `@Suite` / `@Test` / `#expect`).
 `swift test` discovers and runs them normally. This is an infrastructure choice,
 not an API deviation.
+
+## M3 mapping
+
+M3 ports the streaming (server-sent events) subset of the OpenAI-compatible
+Chat Completions provider.
+
+| Upstream | Swift | Notes |
+| --- | --- | --- |
+| `api/openai-completions.ts` `stream()` | `Providers/OpenAICompletionsProvider.swift` + `Providers/OpenAIStreamParser.swift` | `ChatProvider.stream(model:context:options:)` returns `AsyncThrowingStream<AssistantMessageEvent, Error>`. |
+| OpenAI SDK SSE reader | `Utils/SSEFrameDecoder.swift` | Byte-oriented framing: split on `\n`, tolerate `\r`, ignore non-`data:` lines, exact UTF-8 across chunk boundaries. |
+| `utils/json-parse.ts` `repairJson` / `parseJsonWithRepair` | `Utils/JSONParse.swift` | Tool arguments are parsed once, after all fragments have been concatenated. |
+| `utils/event-stream.ts` (`AssistantMessageEventStream`) | `AsyncThrowingStream` | No custom event queue; the public event protocol is simplified. |
+| `utils/abort*.ts` (`AbortSignal`) | `CancellationSignal` + `Task.cancel()` | `abort()` / `cancel()` and task cancellation both interrupt the stream. |
+| `chat.completions.create(params, { signal })` | `HTTP/HTTPStreamingClient.swift` | `StreamingHTTPClient` / `URLSession.bytes(for:)`; `URLSessionHTTPClient` conforms. |
+| `retryProviderRequest(() => create(...))` | `ProviderRetry.retry` | Wraps stream *establishment* only, matching upstream. |
+| `parseChunkUsage` / `mapStopReason` | `Providers/OpenAIResponseParser.swift` (reused) | Shared with the M2 non-streaming path. |
+
+### M3 deviations
+
+1. **Simplified event protocol.** Upstream emits `start` plus per-block
+   `*_start` / `*_delta` / `*_end` events carrying a shared `partial` message,
+   then `done`/`error` with a `reason`. The Swift port emits `.start`, flat
+   `.textDelta` / `.thinkingDelta` / `.toolCallDelta`, then `.done(message)`.
+   The per-block start/end ordering is preserved inside the final message's
+   `content` array.
+2. **`[DONE]` tolerates a missing `finish_reason`.** Upstream throws
+   `Stream ended without finish_reason` whenever `supportsFinishReason` is set
+   (the default) and no chunk carried one. Because the task contract defines
+   `[DONE]` as a terminator, the Swift port infers `stop` / `toolUse` from the
+   accumulated content when `[DONE]` is seen without a `finish_reason`, and only
+   throws ``OpenAIStreamError/missingFinishReason`` for a clean EOF with neither.
+3. **No partial JSON decoding.** The `partial-json` dependency is omitted. Raw
+   argument fragments are forwarded verbatim in `.toolCallDelta`; the final
+   arguments are parsed once via ``JSONParse/parse(_:)`` (with the upstream
+   repair pass) and fall back to `{}` when malformed.
+4. **Cancellation is distinct from failure.** `CancellationSignal.cancel()` /
+   `abort()` and consuming-`Task` cancellation finish the stream by throwing
+   `CancellationError` (never a retryable `.error` event). Other
+   provider/transport failures are delivered as a final `.error` event.
+5. **Streaming always requests usage.** `buildParams` sets
+   `stream_options.include_usage = true`; there is no compat switch to disable
+   it. `max_tokens`, `stream: true`, and the M2 simplifications otherwise apply.
+6. **Retry scope.** Retries cover the HTTP response head only; a failure after
+   the stream has started is surfaced as `.error` without re-issuing the
+   request, matching upstream's `retryProviderRequest` placement.
+7. **Test transport buffers.** `URLSession.bytes(for:)` on top of a custom
+   `URLProtocol` may buffer the mock body until the protocol completes, so
+   provider-level tests assert end-to-end wiring while byte-boundary UTF-8 and
+   framing are covered deterministically by `SSEFrameDecoderTests`.
+

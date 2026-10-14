@@ -33,6 +33,12 @@ public final class CancellationSignal: @unchecked Sendable {
         for handler in handlers { handler() }
     }
 
+    /// Alias for ``cancel()`` matching the upstream `AbortController.abort()`
+    /// spelling used by callers that treat the signal as an abort handle.
+    public func abort() {
+        cancel()
+    }
+
     /// Registers a handler invoked on cancellation. Runs immediately when the
     /// signal is already cancelled.
     public func onCancel(_ handler: @escaping @Sendable () -> Void) {
