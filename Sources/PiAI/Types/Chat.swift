@@ -72,6 +72,12 @@ public struct ChatOptions: Sendable {
     public var apiKey: String
     public var temperature: Double?
     public var maxTokens: Int?
+    /// Nucleus sampling parameter forwarded as `top_p` when present.
+    public var topP: Double?
+    /// Forwarded as `frequency_penalty` when present.
+    public var frequencyPenalty: Double?
+    /// Forwarded as `presence_penalty` when present.
+    public var presencePenalty: Double?
     /// Optional tool selection forwarded as `tool_choice` when present.
     public var toolChoice: ToolChoice?
     public var headers: [String: String]
@@ -82,6 +88,9 @@ public struct ChatOptions: Sendable {
         apiKey: String = "",
         temperature: Double? = nil,
         maxTokens: Int? = nil,
+        topP: Double? = nil,
+        frequencyPenalty: Double? = nil,
+        presencePenalty: Double? = nil,
         toolChoice: ToolChoice? = nil,
         headers: [String: String] = [:],
         signal: CancellationSignal? = nil
@@ -89,6 +98,9 @@ public struct ChatOptions: Sendable {
         self.apiKey = apiKey
         self.temperature = temperature
         self.maxTokens = maxTokens
+        self.topP = topP
+        self.frequencyPenalty = frequencyPenalty
+        self.presencePenalty = presencePenalty
         self.toolChoice = toolChoice
         self.headers = headers
         self.signal = signal

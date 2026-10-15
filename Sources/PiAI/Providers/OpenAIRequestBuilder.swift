@@ -88,6 +88,15 @@ public enum OpenAIRequestBuilder {
         if let temperature = options.temperature {
             body["temperature"] = .number(temperature)
         }
+        if let topP = options.topP {
+            body["top_p"] = .number(topP)
+        }
+        if let frequencyPenalty = options.frequencyPenalty {
+            body["frequency_penalty"] = .number(frequencyPenalty)
+        }
+        if let presencePenalty = options.presencePenalty {
+            body["presence_penalty"] = .number(presencePenalty)
+        }
 
         if !context.tools.isEmpty {
             body["tools"] = .array(context.tools.map(convertTool))

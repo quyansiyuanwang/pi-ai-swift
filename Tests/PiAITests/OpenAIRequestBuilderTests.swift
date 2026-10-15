@@ -26,6 +26,9 @@ import Testing
         apiKey: String = "test-key",
         temperature: Double? = nil,
         maxTokens: Int? = nil,
+        topP: Double? = nil,
+        frequencyPenalty: Double? = nil,
+        presencePenalty: Double? = nil,
         toolChoice: ToolChoice? = nil,
         headers: [String: String] = [:]
     ) -> ChatOptions {
@@ -33,6 +36,9 @@ import Testing
             apiKey: apiKey,
             temperature: temperature,
             maxTokens: maxTokens,
+            topP: topP,
+            frequencyPenalty: frequencyPenalty,
+            presencePenalty: presencePenalty,
             toolChoice: toolChoice,
             headers: headers
         )
@@ -149,7 +155,21 @@ import Testing
         )
         #expect(body["max_tokens"].isNull)
         #expect(body["temperature"].isNull)
+        #expect(body["top_p"].isNull)
+        #expect(body["frequency_penalty"].isNull)
+        #expect(body["presence_penalty"].isNull)
         #expect(body["tools"].isNull)
+    }
+
+    @Test func bodyForwardsSamplingParameters() {
+        let body = OpenAIRequestBuilder.makeBody(
+            model: makeModel(),
+            context: ChatContext(messages: [.user(UserMessage(content: "hi", timestamp: 0))]),
+            options: makeOptions(topP: 0.9, frequencyPenalty: 0.4, presencePenalty: -0.2)
+        )
+        #expect(body["top_p"] == .number(0.9))
+        #expect(body["frequency_penalty"] == .number(0.4))
+        #expect(body["presence_penalty"] == .number(-0.2))
     }
 
     @Test func toolChoiceIsOmittedByDefault() {
