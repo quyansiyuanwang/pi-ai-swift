@@ -12,6 +12,7 @@ This document records how the Swift port maps to the upstream TypeScript source
 | M3 | OpenAI Completions (SSE streaming) + tool fragment accumulation + reasoning + cancellation | ✅ done |
 | M4 | Full test coverage + CI + docs + LICENSE/ATTRIBUTION | ✅ done |
 | M5 | `calculateCost` / `clampThinkingLevel` + offline example | ✅ done |
+| M6 | OpenAI Responses API (`openai-responses`) streaming + non-streaming | ✅ done |
 
 ## M1 type mapping
 
@@ -229,6 +230,38 @@ end-to-end example.
    Tagging is left to the repository owner; `PiAI.version` already reports
    `0.1.0`.
 
+## M6 mapping (OpenAI Responses)
+
+M6 adds the `openai-responses` provider (`POST {baseURL}/responses`) with both
+SSE streaming and a Swift-specific non-streaming `complete`.
+
+| Upstream | Swift | Notes |
+| --- | --- | --- |
+| `api/openai-responses.ts` `buildParams` | `Providers/OpenAIResponsesRequestBuilder.swift` | `model`, `input`, `stream`, `store: false`, `tools`, `max_output_tokens` (min 16), `temperature`, `top_p`, optional `tool_choice` and `reasoning.effort`. |
+| `api/openai-responses-shared.ts` `convertResponsesMessages` | `Providers/OpenAIResponsesRequestBuilder.swift` | System/developer instructions, user `input_text`/`input_image`, assistant `output_text` and `function_call`, tool `function_call_output`. |
+| `api/openai-responses-shared.ts` `convertResponsesTools` | `Providers/OpenAIResponsesRequestBuilder.swift` | `{type: "function", name, description, parameters, strict: false}`. |
+| `api/openai-responses-shared.ts` `processResponsesStream` | `Providers/OpenAIResponsesStreamParser.swift` | `response.output_item.added/done`, text/reasoning/function-call deltas, `response.completed`/`incomplete`, `response.failed`/`error`. |
+| `api/openai-responses.ts` streaming `stream()` | `Providers/OpenAIResponsesProvider.swift` | `ChatProvider` + `ChatCompleting`, `ProviderRetry`, `CancellationSignal`. |
+
+### M6 deviations
+
+1. **Non-streaming derivation.** Upstream is streaming-only; M6 adds a
+   `stream: false` path that parses the full `response` object (tolerating an
+   SDK-style `{"response": ...}` envelope).
+2. **Simplified request fields.** `store: false` is always sent; compat flags,
+   `prompt_cache_*`, `include: ["reasoning.encrypted_content"]`, service tiers,
+   session affinity and vendor-specific handling are omitted.
+3. **Reasoning effort is a provider property.** Because `ChatOptions` is kept
+   stable, `OpenAIResponsesProvider.reasoningEffort` is forwarded as
+   `reasoning: { effort }` when set; `model.thinkingLevelMap` remapping and
+   `configuration_update` items are not ported.
+4. **Tool-call ids keep only the `call_id`.** Upstream persists
+   `call_id|item_id`; the port uses the `call_id` for streaming, non-streaming
+   and replay (assistant `function_call` items omit the Responses `id`).
+5. **Reasoning replay is best effort.** A thinking block is only replayed when
+   its `thinkingSignature` parses as a JSON object; the `input_image` details
+   and grammar/custom tool items are not ported.
+
 ## Upstream file correspondence
 
 Every upstream file in scope and where its behavior lives in Swift.
@@ -237,6 +270,8 @@ Every upstream file in scope and where its behavior lives in Swift.
 | --- | --- | --- |
 | `types.ts` | `Types/Model.swift`, `Types/Chat.swift`, `Types/Message.swift`, `Types/Content.swift`, `Types/Tool.swift`, `Types/ToolChoice.swift`, `Types/Usage.swift`, `Types/Events.swift` | OpenAI-compatible subset. |
 | `api/openai-completions.ts` | `Providers/OpenAIRequestBuilder.swift`, `Providers/OpenAIResponseParser.swift`, `Providers/OpenAIStreamParser.swift`, `Providers/OpenAICompletionsProvider.swift`, `Providers/ChatCompleting.swift`, `Providers/ChatProvider.swift` | Request build, non-streaming parse, SSE parse, retry, cancel. |
+| `api/openai-responses.ts` | `Providers/OpenAIResponsesRequestBuilder.swift`, `Providers/OpenAIResponsesProvider.swift` | Request build, retry, cancellation. Compat flags, prompt caching, session affinity, ChatGPT sign-in, grammar tools and service tiers are out of scope. |
+| `api/openai-responses-shared.ts` | `Providers/OpenAIResponsesStreamParser.swift`, `Providers/OpenAIResponsesResponseParser.swift` | Message/tool conversion, SSE event processing, usage/stop-reason mapping. |
 | `api/simple-options.ts` | `Types/Chat.swift` (`ChatOptions`), `Models.swift` (`clampThinkingLevel`) | `toolChoice` / sampling simplifications only. |
 | `api/transform-messages.ts` | `Providers/OpenAIRequestBuilder.swift` (`convertMessages`) | Message conversion; image downgrade **not** ported (see deviations). |
 | `api/openai-prompt-cache.ts` | — | Not ported (no prompt-cache key support). |
