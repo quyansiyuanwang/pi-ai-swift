@@ -13,6 +13,7 @@ This document records how the Swift port maps to the upstream TypeScript source
 | M4 | Full test coverage + CI + docs + LICENSE/ATTRIBUTION | ✅ done |
 | M5 | `calculateCost` / `clampThinkingLevel` + offline example | ✅ done |
 | M6 | OpenAI Responses API (`openai-responses`) streaming + non-streaming | ✅ done |
+| M7 | Anthropic Messages API (`anthropic-messages`) streaming + non-streaming | ✅ done |
 
 ## M1 type mapping
 
@@ -262,6 +263,46 @@ SSE streaming and a Swift-specific non-streaming `complete`.
    its `thinkingSignature` parses as a JSON object; the `input_image` details
    and grammar/custom tool items are not ported.
 
+## M7 mapping (Anthropic Messages)
+
+M7 adds the `anthropic-messages` provider (`POST {baseURL}/v1/messages`) with
+both SSE streaming and a Swift-specific non-streaming `complete`.
+
+| Upstream | Swift | Notes |
+| --- | --- | --- |
+| `api/anthropic-messages.ts` `buildParams` | `Providers/AnthropicMessagesRequestBuilder.swift` | `model`, `max_tokens`, `messages`, `stream`, top-level `system`, `temperature`, `top_p`, optional `tools` and `thinking: { type: "enabled", budget_tokens }`. |
+| `api/anthropic-messages.ts` `convertContentBlocks` / `convertMessages` | `Providers/AnthropicMessagesRequestBuilder.swift` | system folding, user text/image blocks, assistant text/thinking/tool_use replay, grouped `tool_result` turns. |
+| `api/anthropic-messages.ts` `convertTools` | `Providers/AnthropicMessagesRequestBuilder.swift` | `{ name, description, input_schema }`. |
+| `api/anthropic-messages.ts` `normalizeToolCallId` | `Providers/AnthropicMessagesRequestBuilder.swift` | `[a-zA-Z0-9_-]` sanitization, truncated to 64 characters. |
+| `api/anthropic-messages.ts` `iterateAnthropicEvents` / stream loop | `Providers/AnthropicMessagesStreamParser.swift` | `message_start`, `content_block_start/delta/stop`, `message_delta`, `message_stop`, `error`. |
+| `api/anthropic-messages.ts` `mapStopReason` | `Providers/AnthropicMessagesStreamParser.swift` (`AnthropicMessagesMapping`) | `end_turn`/`stop_sequence` → stop, `max_tokens` → length, `tool_use` → toolUse. |
+| `api/anthropic-messages.ts` streaming `stream()` | `Providers/AnthropicMessagesProvider.swift` | `ChatProvider` + `ChatCompleting`, `ProviderRetry`, `CancellationSignal`. |
+
+### M7 deviations
+
+1. **Non-streaming derivation.** Upstream is streaming-only; M7 adds a
+   `stream: false` path that parses the full `message` object (tolerating a
+   `{"message": ...}` envelope).
+2. **`max_tokens` fallback is a fixed default.** Upstream uses
+   `options.maxTokens ?? model.maxTokens`; this subset sends
+   `options.maxTokens ?? 4096` (``AnthropicMessagesRequestBuilder/defaultMaxTokens``)
+   so a value is always present even when the model catalog omits `maxTokens`.
+3. **No compat/caching/beta surface.** Provider compat flags, prompt-cache
+   control blocks, beta headers, Claude Code OAuth identity, Bedrock/Vertex
+   variants, strict tools, session affinity, mid-conversation system messages
+   and count-tokens are not ported.
+4. **Thinking replay requires a signature.** A `thinking` block with a
+   non-empty `thinkingSignature` is replayed verbatim; a signature-less block is
+   downgraded to plain text, and `redacted` blocks round-trip as
+   `redacted_thinking`. Adaptive thinking / effort levels are not ported.
+5. **Unknown stop reasons map to `.error`.** Upstream throws for an unhandled
+   stop reason; the Swift mapping returns `.error` with a diagnostic message,
+   matching the other providers.
+6. **Tool-use `input` is best effort.** `input_json_delta` fragments are
+   accumulated and parsed once on `content_block_stop`; malformed or missing
+   arguments fall back to the `input` sent in `content_block_start` (usually
+   `{}`).
+
 ## Upstream file correspondence
 
 Every upstream file in scope and where its behavior lives in Swift.
@@ -272,6 +313,7 @@ Every upstream file in scope and where its behavior lives in Swift.
 | `api/openai-completions.ts` | `Providers/OpenAIRequestBuilder.swift`, `Providers/OpenAIResponseParser.swift`, `Providers/OpenAIStreamParser.swift`, `Providers/OpenAICompletionsProvider.swift`, `Providers/ChatCompleting.swift`, `Providers/ChatProvider.swift` | Request build, non-streaming parse, SSE parse, retry, cancel. |
 | `api/openai-responses.ts` | `Providers/OpenAIResponsesRequestBuilder.swift`, `Providers/OpenAIResponsesProvider.swift` | Request build, retry, cancellation. Compat flags, prompt caching, session affinity, ChatGPT sign-in, grammar tools and service tiers are out of scope. |
 | `api/openai-responses-shared.ts` | `Providers/OpenAIResponsesStreamParser.swift`, `Providers/OpenAIResponsesResponseParser.swift` | Message/tool conversion, SSE event processing, usage/stop-reason mapping. |
+| `api/anthropic-messages.ts` | `Providers/AnthropicMessagesRequestBuilder.swift`, `Providers/AnthropicMessagesStreamParser.swift`, `Providers/AnthropicMessagesResponseParser.swift`, `Providers/AnthropicMessagesProvider.swift` | Request build, message/tool conversion, SSE parse, non-streaming parse, retry, cancel. Compat flags, prompt caching, beta headers, Bedrock/Vertex variants and count-tokens are out of scope. |
 | `api/simple-options.ts` | `Types/Chat.swift` (`ChatOptions`), `Models.swift` (`clampThinkingLevel`) | `toolChoice` / sampling simplifications only. |
 | `api/transform-messages.ts` | `Providers/OpenAIRequestBuilder.swift` (`convertMessages`) | Message conversion; image downgrade **not** ported (see deviations). |
 | `api/openai-prompt-cache.ts` | — | Not ported (no prompt-cache key support). |
