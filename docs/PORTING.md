@@ -14,6 +14,7 @@ This document records how the Swift port maps to the upstream TypeScript source
 | M5 | `calculateCost` / `clampThinkingLevel` + offline example | ✅ done |
 | M6 | OpenAI Responses API (`openai-responses`) streaming + non-streaming | ✅ done |
 | M7 | Anthropic Messages API (`anthropic-messages`) streaming + non-streaming | ✅ done |
+| M8 | Google Generative AI (`google-generative-ai`) streaming + non-streaming | ✅ done |
 
 ## M1 type mapping
 
@@ -303,6 +304,49 @@ both SSE streaming and a Swift-specific non-streaming `complete`.
    arguments fall back to the `input` sent in `content_block_start` (usually
    `{}`).
 
+## M8 mapping (Google Generative AI)
+
+M8 adds the `google-generative-ai` (Gemini) provider
+(`POST {baseURL}/v1beta/models/{model}:generateContent` and
+`:streamGenerateContent?alt=sse`) with both SSE streaming and a Swift-specific
+non-streaming `complete`.
+
+| Upstream | Swift | Notes |
+| --- | --- | --- |
+| `api/google-generative-ai.ts` `buildParams` | `Providers/GoogleGenerativeAIRequestBuilder.swift` | `contents`, top-level `systemInstruction`, `tools`, and `generationConfig` (`temperature`, `topP`, `maxOutputTokens`, `thinkingConfig.thinkingBudget`). |
+| `api/google-shared.ts` `convertMessages` | `Providers/GoogleGenerativeAIRequestBuilder.swift` | user text/`inlineData` images, assistant `role: "model"` text/`thought`/`functionCall` replay, grouped `functionResponse` user turns. |
+| `api/google-shared.ts` `convertTools` | `Providers/GoogleGenerativeAIRequestBuilder.swift` | `{ functionDeclarations: [{ name, description, parameters }] }`, with JSON Schema meta-declarations stripped for the OpenAPI dialect. |
+| `api/google-shared.ts` `isThinkingPart` / `retainThoughtSignature` / `mapStopReason` | `Providers/GoogleGenerativeAIStreamParser.swift` (`GoogleGenerativeAIMapping`) | `thought === true` marks thinking; signatures are retained per block; `STOP` → stop, `MAX_TOKENS` → length, everything else → error. |
+| `api/google-generative-ai.ts` streaming loop | `Providers/GoogleGenerativeAIStreamParser.swift` | `candidates[0].content.parts` text/thought/functionCall, `usageMetadata`, `finishReason`. |
+| `api/google-generative-ai.ts` `stream()` | `Providers/GoogleGenerativeAIProvider.swift` | `ChatProvider` + `ChatCompleting`, `ProviderRetry`, `CancellationSignal`, `x-goog-api-key` auth. |
+
+### M8 deviations
+
+1. **Non-streaming derivation.** Upstream is streaming-only; M8 adds a
+   `stream: false` path that feeds the single `GenerateContentResponse` object
+   through the streaming parser so both paths share identical handling.
+2. **Token-budget thinking only.** `GoogleGenerativeAIProvider.thinkingBudget`
+   is forwarded as `generationConfig.thinkingConfig.thinkingBudget`; the Gemini 3
+   discrete `thinkingLevel` control, `includeThoughts`, disabled-thinking
+   fallbacks and `model.thinkingLevelMap` remapping are not ported.
+3. **`parameters`, not `parametersJsonSchema`.** Tool schemas use the legacy
+   OpenAPI 3.0 `parameters` field (with `$schema`/`$id`/`$defs`/`definitions`
+   stripped recursively) as requested for this subset; `supportsStrictToolSampling`
+   and `toolConfig.functionCallingConfig` are not ported.
+4. **`x-goog-api-key` only.** The API key is sent as the `x-goog-api-key`
+   header; the `?key=` query fallback, Vertex AI, OAuth and safety-setting
+   overrides are not ported.
+5. **Function calls omit ids.** `functionCall`/`functionResponse` parts do not
+   carry Gemini 3+ tool-call ids; generated streaming ids use the upstream
+   `{name}_{timestamp}_{counter}` shape.
+6. **Stream ends without `finishReason` throws.** Upstream throws
+   `Google stream ended without a finish reason`; the port surfaces the same as
+   ``GoogleGenerativeAIStreamError/missingStopReason``. Non-streaming responses
+   infer `stop`/`toolUse` from the accumulated content instead.
+7. **Tool-result images.** Images are nested in `functionResponse.parts` for
+   Gemini 3+ (and non-Gemini ids); for Gemini < 3 the upstream separate user
+   image turn is not emitted.
+
 ## Upstream file correspondence
 
 Every upstream file in scope and where its behavior lives in Swift.
@@ -314,6 +358,8 @@ Every upstream file in scope and where its behavior lives in Swift.
 | `api/openai-responses.ts` | `Providers/OpenAIResponsesRequestBuilder.swift`, `Providers/OpenAIResponsesProvider.swift` | Request build, retry, cancellation. Compat flags, prompt caching, session affinity, ChatGPT sign-in, grammar tools and service tiers are out of scope. |
 | `api/openai-responses-shared.ts` | `Providers/OpenAIResponsesStreamParser.swift`, `Providers/OpenAIResponsesResponseParser.swift` | Message/tool conversion, SSE event processing, usage/stop-reason mapping. |
 | `api/anthropic-messages.ts` | `Providers/AnthropicMessagesRequestBuilder.swift`, `Providers/AnthropicMessagesStreamParser.swift`, `Providers/AnthropicMessagesResponseParser.swift`, `Providers/AnthropicMessagesProvider.swift` | Request build, message/tool conversion, SSE parse, non-streaming parse, retry, cancel. Compat flags, prompt caching, beta headers, Bedrock/Vertex variants and count-tokens are out of scope. |
+| `api/google-generative-ai.ts` | `Providers/GoogleGenerativeAIRequestBuilder.swift`, `Providers/GoogleGenerativeAIProvider.swift` | Request build, `streamGenerateContent?alt=sse`, non-streaming `generateContent`, `x-goog-api-key`, retry, cancel. Vertex AI, OAuth, safety-setting overrides, thinking-level control and media generation are out of scope. |
+| `api/google-shared.ts` | `Providers/GoogleGenerativeAIStreamParser.swift`, `Providers/GoogleGenerativeAIResponseParser.swift` | Message/tool conversion, thought parts/signatures, function calls, usage and stop-reason mapping, streaming + non-streaming parse. |
 | `api/simple-options.ts` | `Types/Chat.swift` (`ChatOptions`), `Models.swift` (`clampThinkingLevel`) | `toolChoice` / sampling simplifications only. |
 | `api/transform-messages.ts` | `Providers/OpenAIRequestBuilder.swift` (`convertMessages`) | Message conversion; image downgrade **not** ported (see deviations). |
 | `api/openai-prompt-cache.ts` | — | Not ported (no prompt-cache key support). |
@@ -361,6 +407,11 @@ in the per-milestone sections above.
 10. **`calculateCost` is pure** (returns instead of mutating `usage.cost`).
 11. **Image downgrade based on `Model.input` is not implemented**; images are
     forwarded regardless of the declared modalities.
-12. **Out of scope:** other providers, images, OAuth, model stores, session
-    resources, CLI, vendor catalogs and `providers/*.js` definitions.
+12. **Out of scope for the OpenAI-compatible subset:** other providers beyond
+    the ported ones, OAuth, model stores, session resources, CLI, vendor
+    catalogs and `providers/*.js` definitions.
+13. **Google Generative AI is a token-budget subset.** `thinkingLevel`,
+    `includeThoughts`, `parametersJsonSchema`, Gemini 3+ tool-call ids,
+    `toolConfig`, the `?key=` query fallback and Vertex AI are not ported (see
+    the M8 deviations).
 
