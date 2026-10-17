@@ -11,12 +11,15 @@ public struct OpenAICompletionsProvider: ChatCompleting, ChatProvider, Sendable 
     public var streamingClient: any StreamingHTTPClient
     public var maxRetries: Int
     public var maxRetryDelayMs: Int?
+    /// Optional reasoning effort forwarded as `reasoning_effort`.
+    public var reasoningEffort: String?
 
     public init(
         httpClient: any HTTPClient = URLSessionHTTPClient(),
         streamingClient: (any StreamingHTTPClient)? = nil,
         maxRetries: Int = 0,
-        maxRetryDelayMs: Int? = nil
+        maxRetryDelayMs: Int? = nil,
+        reasoningEffort: String? = nil
     ) {
         self.httpClient = httpClient
         self.streamingClient = streamingClient
@@ -24,6 +27,7 @@ public struct OpenAICompletionsProvider: ChatCompleting, ChatProvider, Sendable 
             ?? URLSessionStreamingHTTPClient()
         self.maxRetries = maxRetries
         self.maxRetryDelayMs = maxRetryDelayMs
+        self.reasoningEffort = reasoningEffort
     }
 
     // MARK: - Non-streaming
@@ -33,7 +37,12 @@ public struct OpenAICompletionsProvider: ChatCompleting, ChatProvider, Sendable 
         context: ChatContext,
         options: ChatOptions
     ) async throws -> AssistantMessage {
-        let request = try OpenAIRequestBuilder.makeRequest(model: model, context: context, options: options)
+        let request = try OpenAIRequestBuilder.makeRequest(
+            model: model,
+            context: context,
+            options: options,
+            reasoningEffort: reasoningEffort
+        )
         let response = try await ProviderRetry.retry(
             ProviderRetryOptions(
                 maxRetries: maxRetries,
@@ -106,7 +115,8 @@ public struct OpenAICompletionsProvider: ChatCompleting, ChatProvider, Sendable 
             model: model,
             context: context,
             options: options,
-            streaming: true
+            streaming: true,
+            reasoningEffort: reasoningEffort
         )
 
         let httpStream = try await ProviderRetry.retry(

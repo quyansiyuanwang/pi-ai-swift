@@ -28,7 +28,8 @@ public enum OpenAIRequestBuilder {
         context: ChatContext,
         options: ChatOptions,
         path: String = "chat/completions",
-        streaming: Bool = false
+        streaming: Bool = false,
+        reasoningEffort: String? = nil
     ) throws -> URLRequest {
         let url = try resolveURL(baseURL: model.baseURL, path: path)
         var request = URLRequest(url: url)
@@ -56,7 +57,13 @@ public enum OpenAIRequestBuilder {
             request.setValue(value, forHTTPHeaderField: name)
         }
         request.httpBody = try JSONEncoder().encode(
-            makeBody(model: model, context: context, options: options, streaming: streaming)
+            makeBody(
+                model: model,
+                context: context,
+                options: options,
+                streaming: streaming,
+                reasoningEffort: reasoningEffort
+            )
         )
         return request
     }
@@ -70,7 +77,8 @@ public enum OpenAIRequestBuilder {
         model: Model,
         context: ChatContext,
         options: ChatOptions,
-        streaming: Bool = false
+        streaming: Bool = false,
+        reasoningEffort: String? = nil
     ) -> JSONValue {
         var body: JSONObject = [
             "model": .string(model.id),
@@ -96,6 +104,10 @@ public enum OpenAIRequestBuilder {
         }
         if let presencePenalty = options.presencePenalty {
             body["presence_penalty"] = .number(presencePenalty)
+        }
+
+        if let reasoningEffort, !reasoningEffort.isEmpty {
+            body["reasoning_effort"] = .string(reasoningEffort)
         }
 
         if !context.tools.isEmpty {

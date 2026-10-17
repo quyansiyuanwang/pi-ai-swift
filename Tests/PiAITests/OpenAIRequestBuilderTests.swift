@@ -172,6 +172,45 @@ import Testing
         #expect(body["presence_penalty"] == .number(-0.2))
     }
 
+    @Test func bodyForwardsReasoningEffort() {
+        let body = OpenAIRequestBuilder.makeBody(
+            model: makeModel(),
+            context: ChatContext(messages: [.user(UserMessage(content: "hi", timestamp: 0))]),
+            options: makeOptions(),
+            reasoningEffort: "high"
+        )
+        #expect(body["reasoning_effort"] == .string("high"))
+    }
+
+    @Test func bodyOmitsReasoningEffortWhenNilOrEmpty() {
+        let nilBody = OpenAIRequestBuilder.makeBody(
+            model: makeModel(),
+            context: ChatContext(),
+            options: makeOptions()
+        )
+        #expect(nilBody["reasoning_effort"].isNull)
+
+        let emptyBody = OpenAIRequestBuilder.makeBody(
+            model: makeModel(),
+            context: ChatContext(),
+            options: makeOptions(),
+            reasoningEffort: ""
+        )
+        #expect(emptyBody["reasoning_effort"].isNull)
+    }
+
+    @Test func reasoningEffortSurvivesRequestRoundTrip() throws {
+        let request = try OpenAIRequestBuilder.makeRequest(
+            model: makeModel(),
+            context: ChatContext(messages: [.user(UserMessage(content: "hi", timestamp: 0))]),
+            options: makeOptions(),
+            reasoningEffort: "medium"
+        )
+        let body = try #require(request.httpBody)
+        let value = try JSONDecoder().decode(JSONValue.self, from: body)
+        #expect(value["reasoning_effort"] == .string("medium"))
+    }
+
     @Test func toolChoiceIsOmittedByDefault() {
         let body = OpenAIRequestBuilder.makeBody(
             model: makeModel(),
